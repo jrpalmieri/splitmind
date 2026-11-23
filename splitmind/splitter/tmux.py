@@ -2,6 +2,7 @@ import atexit
 import os
 import time
 from subprocess import check_output, CalledProcessError
+import re
 
 from splitmind.models import Split
 
@@ -16,7 +17,30 @@ def read_tmux_output(res, delimiter=':'):
     pass
   return res.strip().split(delimiter)
 
-def tmux_split(*args, target=None, display=None, cmd="/bin/cat -", use_stdin=False, size=None,
+
+
+def tmux_version():
+    """
+    Queries the currently running tmux server version.
+    Returns a float (e.g., 3.1 or 3.2) for easy comparison.
+    """
+    try:
+        # Query the running server directly via display-message
+        version_str = check_output(
+            ["tmux", "display-message", "-p", "#{version}"],
+            text=True
+        ).strip()
+        
+        # Extract just the major and minor numeric digits (e.g., '3.2a' -> '3.2')
+        match = re.match(r"^(\d+\.\d+)", version_str)
+        if match:
+            return float(match.group(1))
+        return 3.0  # Safe fallback if parsing fails
+    except (CalledProcessError, ValueError):
+        return 3.0  # Fallback if tmux isn't running or command fails
+
+
+def tmux_split(*args, target=None, display=None, cmd="/bin/cat -", use_stdin=False, size=None, version=None,
                **kwargs):
     """
     Parameters
@@ -28,14 +52,21 @@ def tmux_split(*args, target=None, display=None, cmd="/bin/cat -", use_stdin=Fal
         Therefore the command will be prepended with (cat)| wo have an other with a pipe as output
         to which we may write
     size : the size of the new split
-        pecify the size of the new pane in lines (for vertical split) or in cells
+        specify the size of the new pane in lines (for vertical split) or in cells
         (for horizontal split), or as a percentage if ending with %
     """
     args = list(args)
     if target is not None:
         args += ["-t", target.id]
     if size is not None:
-        args += ["-l", size]
+        if version is None or version >= 3.4:
+            # updated for tmux 3.4 - -p no longer supported, percentage split is
+            # now done using -l and using % as a suffix to size value
+            args += ["-l", size]
+        else:
+            # tmux pre version 3.4 - -p is supported, percentage split is done using -p and stripping the % suffix
+            args += ["-p", size[:-1]] if size.endswith("%") else ["-l", size]
+
     fd = "#{pane_tty}" if not use_stdin else "/proc/#{pane_pid}/fd/0"
     if use_stdin:
         cmd = "(cat)|"+cmd
@@ -94,6 +125,7 @@ class Tmux():
         self.cmd = cmd
         self.panes = [TmuxSplit(os.environ["TMUX_PANE"], None, "main", {}) ]
         self._saved_tmux_options = tmux_window_options()
+        self.version = tmux_version()
         if not [o for o in self._saved_tmux_options if o.startswith("pane-border-status")]:
             self._saved_tmux_options.append("pane-border-status off")
         atexit.register(self.close)
@@ -135,7 +167,7 @@ class Tmux():
         if isinstance(target, str):
             target = self.get(target)
         split = tmux_split(*args, target=target, display=display, cmd=cmd or self.cmd,
-                           use_stdin=use_stdin, **kwargs)
+                           use_stdin=use_stdin, version=self.version, **kwargs)
         if display:
             tmux_pane_title(split, display)
         self.panes.append(split)

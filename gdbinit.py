@@ -4,6 +4,8 @@ from __future__ import print_function
 from __future__ import unicode_literals
 
 import sys
+sys.path.append("/home/joe/repos/pwndbg")
+sys.path.append("/home/joe/repos/pwndbg/pwndbg")
 from os import path
 
 
